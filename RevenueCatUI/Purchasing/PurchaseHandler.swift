@@ -284,16 +284,15 @@ extension PurchaseHandler {
     }
 
     @MainActor
-    func performExternalRestoreLogic() async throws -> (info: CustomerInfo, success: Bool) {
+    func performExternalRestoreLogic() async -> (userCancelled: Bool, error: Error?) {
         Logger.debug(Strings.executing_external_restore_logic)
 
         guard let externalRestoreMethod = self.performRestore else {
-            throw PaywallError.performPurchaseAndRestoreHandlersNotDefined(missingBlocks: "performRestore is")
-        }
-
-        defer {
-            self.restoreInProgress = false
-            self.actionTypeInProgress = nil
+            let err = PaywallError.performPurchaseAndRestoreHandlersNotDefined(
+                missingBlocks: "performRestore is"
+            )
+            self.restoreError = err
+            return (userCancelled: false, error: err)
         }
 
         self.restoreInProgress = true
@@ -302,19 +301,33 @@ extension PurchaseHandler {
 
         self.startAction(.restore)
 
+        defer {
+            self.restoreInProgress = false
+            self.actionTypeInProgress = nil
+        }
+
         let result = await externalRestoreMethod()
 
         if let error = result.error {
             self.restoreError = error
-            throw error
+            return (userCancelled: false, error: error)
         }
 
-        let customerInfo = try await self.purchases.customerInfo()
+        do {
+            let customerInfo = try await self.purchases.customerInfo()
+            self.setRestored(customerInfo)
 
-        // This is done by `RestorePurchasesButton` when using RevenueCat logic.
-        self.setRestored(customerInfo)
-
-        return (info: customerInfo, result.success)
+            if customerInfo.hasActiveSubscriptionsOrNonSubscriptions {
+                Logger.debug("Restoration succeeded ✅")
+                return (userCancelled: false, error: nil)
+            } else {
+                Logger.debug("Restoration finished but no active entitlements ❌")
+                return (userCancelled: true, error: nil)
+            }
+        } catch {
+            self.restoreError = error
+            return (userCancelled: false, error: error)
+        }
     }
 
     @MainActor
