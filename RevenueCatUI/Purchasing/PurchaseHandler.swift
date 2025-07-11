@@ -284,21 +284,18 @@ extension PurchaseHandler {
     }
 
     @MainActor
-    func performExternalRestoreLogic() async -> (userCancelled: Bool, error: Error?) {
+    func performExternalRestoreLogic() async throws -> (info: CustomerInfo, success: Bool) {
         Logger.debug(Strings.executing_external_restore_logic)
 
         guard let externalRestoreMethod = self.performRestore else {
-            let err = PaywallError.performPurchaseAndRestoreHandlersNotDefined(
+            throw PaywallError.performPurchaseAndRestoreHandlersNotDefined(
                 missingBlocks: "performRestore is"
             )
-            self.restoreError = err
-            return (userCancelled: false, error: err)
         }
 
         self.restoreInProgress = true
         self.restoredCustomerInfo = nil
         self.restoreError = nil
-
         self.startAction(.restore)
 
         defer {
@@ -310,24 +307,16 @@ extension PurchaseHandler {
 
         if let error = result.error {
             self.restoreError = error
-            return (userCancelled: false, error: error)
+            throw error
         }
 
-        do {
-            let customerInfo = try await self.purchases.customerInfo()
-            self.setRestored(customerInfo)
+        let customerInfo = try await self.purchases.customerInfo()
+        self.setRestored(customerInfo)
 
-            if customerInfo.hasActiveSubscriptionsOrNonSubscriptions {
-                Logger.debug("Restoration succeeded ✅")
-                return (userCancelled: false, error: nil)
-            } else {
-                Logger.debug("Restoration finished but no active entitlements ❌")
-                return (userCancelled: true, error: nil)
-            }
-        } catch {
-            self.restoreError = error
-            return (userCancelled: false, error: error)
-        }
+        return (
+            info: customerInfo,
+            success: customerInfo.hasActiveSubscriptionsOrNonSubscriptions
+        )
     }
 
     @MainActor
